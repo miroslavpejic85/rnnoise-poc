@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>RNNoise Audio Noise Suppression</title>
+        <link rel="stylesheet" href="../styles/index.css" />
+    </head>
+    <body>
+        <div class="container">
+            <h1>🎙️ RNNoise Test</h1>
+
+            <div class="controls">
+                <button id="startBtn">🎤 Start Audio Processing</button>
+                <button id="toggleBtn" disabled>🔇 RNNoise: OFF</button>
+            </div>
+
+            <div class="volume-bars">
+                <div class="volume-bar">
+                    <div>Input Volume</div>
+                    <div class="volume-bar-container">
+                        <div class="volume-bar-fill" id="inputVolume"></div>
+                    </div>
+                </div>
+                <div class="volume-bar">
+                    <div>Output Volume</div>
+                    <div class="volume-bar-container">
+                        <div class="volume-bar-fill" id="outputVolume"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="audio-preview" id="audioPreview">
+                <h4>Audio Preview:</h4>
+                <audio id="audioElement" controls autoplay></audio>
+            </div>
+
+            <div class="status" id="status">Ready to start...</div>
+        </div>
+
+        <script src="../js/node-processor.js"></script>
+    </body>
+</html>

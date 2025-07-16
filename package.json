@@ -1,0 +1,28 @@
+{
+    "name": "rnnoise-poc",
+    "version": "1.0.0",
+    "description": "RNNoise Audio Noise Suppression Proof of Concept",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "nodemon server.js",
+        "format": "prettier --write .",
+        "format:check": "prettier --check ."
+    },
+    "dependencies": {
+        "express": "^5.1.0"
+    },
+    "devDependencies": {
+        "nodemon": "^3.1.10",
+        "prettier": "^3.6.2"
+    },
+    "keywords": [
+        "rnnoise",
+        "audio",
+        "noise-suppression",
+        "webassembly",
+        "audioworklet"
+    ],
+    "author": "miroslav.pejic.85@gmail.com",
+    "license": "AGPL-3.0"
+}
