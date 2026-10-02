@@ -51,6 +51,8 @@ class UIManager {
     }
 
     hideAudioPreview() {
+        this.elements.audioElement.pause();
+        this.elements.audioElement.srcObject = null;
         this.elements.audioPreview.style.display = 'none';
     }
 }
@@ -62,9 +64,9 @@ class MessageHandler {
         this.wasmLoader = wasmLoader;
     }
 
-    handleMessage(event) {
+    handleMessage(event, workletNode) {
         if (event.data.type === 'request-wasm') {
-            this.wasmLoader.loadWasmBuffer();
+            this.wasmLoader.loadWasmBuffer(workletNode);
         } else if (event.data.type === 'wasm-ready') {
             this.uiManager.updateStatus('✅ RNNoise WASM initialized successfully', 'success');
         } else if (event.data.type === 'wasm-error') {
@@ -87,7 +89,9 @@ class WasmLoader {
         this.getWorkletNode = getWorkletNode;
     }
 
-    async loadWasmBuffer() {
+    async loadWasmBuffer(workletNode = this.getWorkletNode()) {
+        if (!workletNode || this.getWorkletNode() !== workletNode) return;
+
         try {
             this.uiManager.updateStatus('📦 Loading RNNoise sync module...', 'info');
 
@@ -98,15 +102,17 @@ class WasmLoader {
             }
 
             const jsContent = await jsResponse.text();
+            if (this.getWorkletNode() !== workletNode) return;
             this.uiManager.updateStatus('📦 Sending sync module to worklet...', 'info');
 
-            this.getWorkletNode().port.postMessage({
+            workletNode.port.postMessage({
                 type: 'sync-module',
                 jsContent: jsContent,
             });
 
             this.uiManager.updateStatus('📦 Sync module sent to worklet', 'info');
         } catch (error) {
+            if (this.getWorkletNode() !== workletNode) return;
             this.uiManager.updateStatus('❌ Failed to load sync module: ' + error.message, 'error');
             console.error('Sync module loading error:', error);
         }
@@ -122,6 +128,8 @@ class RNNoiseProcessor {
         this.sourceNode = null;
         this.destinationNode = null;
         this.isProcessing = false;
+        this.isStarting = false;
+        this.sessionId = 0;
         this.noiseSuppressionEnabled = false;
 
         this.initializeUI();
@@ -156,27 +164,47 @@ class RNNoiseProcessor {
     }
 
     async startProcessing() {
+        if (this.isStarting || this.isProcessing) return;
+
+        this.isStarting = true;
+        this.elements.startBtn.disabled = true;
+        const sessionId = ++this.sessionId;
+
         try {
             this.uiManager.updateStatus('🎤 Starting audio processing...', 'info');
 
-            this.audioContext = new AudioContext();
-            const sampleRate = this.audioContext.sampleRate;
+            const audioContext = new AudioContext({ sampleRate: 48000 });
+            this.audioContext = audioContext;
+            const sampleRate = audioContext.sampleRate;
+            if (sampleRate !== 48000) throw new Error('RNNoise requires a 48000Hz audio context');
             this.uiManager.updateStatus(`🎵 Audio context created with sample rate: ${sampleRate}Hz`, 'info');
 
-            this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (this.sessionId !== sessionId) {
+                mediaStream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+            this.mediaStream = mediaStream;
 
-            await this.audioContext.audioWorklet.addModule('../js/noise-suppression-processor.js');
+            await audioContext.audioWorklet.addModule('../js/noise-suppression-processor.js');
+            if (this.sessionId !== sessionId) return;
 
-            this.workletNode = new AudioWorkletNode(this.audioContext, 'noise-suppression-processor', {
+            await audioContext.resume();
+            if (this.sessionId !== sessionId) return;
+
+            const workletNode = new AudioWorkletNode(audioContext, 'noise-suppression-processor', {
                 numberOfInputs: 1,
                 numberOfOutputs: 1,
                 outputChannelCount: [1],
             });
+            this.workletNode = workletNode;
 
-            this.workletNode.port.onmessage = (event) => this.messageHandler.handleMessage(event);
+            workletNode.port.onmessage = (event) => {
+                if (this.workletNode === workletNode) this.messageHandler.handleMessage(event, workletNode);
+            };
 
-            this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
-            this.destinationNode = this.audioContext.createMediaStreamDestination();
+            this.sourceNode = audioContext.createMediaStreamSource(mediaStream);
+            this.destinationNode = audioContext.createMediaStreamDestination();
 
             this.sourceNode.connect(this.workletNode);
             this.workletNode.connect(this.destinationNode);
@@ -187,20 +215,36 @@ class RNNoiseProcessor {
             this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled);
             this.uiManager.updateStatus('🎤 Audio processing started', 'success');
         } catch (error) {
+            if (this.sessionId !== sessionId) return;
+            this.stopProcessing();
             this.uiManager.updateStatus('❌ Error: ' + error.message, 'error');
+        } finally {
+            if (this.sessionId === sessionId) {
+                this.isStarting = false;
+                this.elements.startBtn.disabled = false;
+            }
         }
     }
 
     stopProcessing() {
+        this.sessionId++;
+        this.isStarting = false;
+        this.elements.startBtn.disabled = false;
+
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach((track) => track.stop());
             this.mediaStream = null;
         }
 
         if (this.audioContext && this.audioContext.state !== 'closed') {
-            this.audioContext.close();
-            this.audioContext = null;
+            this.audioContext.close().catch((error) => console.error('Audio context closing error:', error));
         }
+        this.audioContext = null;
+
+        this.sourceNode?.disconnect();
+        this.workletNode?.disconnect();
+        this.destinationNode?.disconnect();
+        if (this.workletNode) this.workletNode.port.onmessage = null;
 
         this.workletNode = null;
         this.sourceNode = null;
@@ -214,6 +258,7 @@ class RNNoiseProcessor {
     }
 
     toggleNoiseSuppression() {
+        if (!this.isProcessing || !this.workletNode) return;
         this.noiseSuppressionEnabled = !this.noiseSuppressionEnabled;
 
         if (this.workletNode) {

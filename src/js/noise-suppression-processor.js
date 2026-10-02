@@ -27,11 +27,9 @@ class WasmModuleInitializer {
             console.log('Has _malloc:', typeof this.Module._malloc === 'function');
             console.log('Has _rnnoise_create:', typeof this.Module._rnnoise_create === 'function');
 
-            this.messagePort.postMessage({ type: 'wasm-ready' });
             return this.Module;
         } catch (error) {
             console.error('Sync module initialization error:', error);
-            this.messagePort.postMessage({ type: 'wasm-error', error: error.message });
             throw error;
         }
     }
@@ -56,8 +54,11 @@ class RNNoiseContextManager {
         this.wasmPcmInputF32Index = this.wasmPcmInput >> 2;
         if (!this.wasmPcmInput) throw new Error('Failed to allocate WASM buffer');
 
-        this.rnnoiseContext = this.module._rnnoise_create();
-        if (!this.rnnoiseContext) throw new Error('Failed to create RNNoise context');
+        this.rnnoiseContext = this.module._rnnoise_create(0);
+        if (!this.rnnoiseContext) {
+            this.destroy();
+            throw new Error('Failed to create RNNoise context');
+        }
 
         console.log('WASM setup complete:', {
             wasmPcmInput: this.wasmPcmInput,
@@ -97,6 +98,10 @@ class RNNoiseContextManager {
         }
     }
 
+    reset() {
+        this.module._rnnoise_init(this.rnnoiseContext, 0);
+    }
+
     destroy() {
         if (this.wasmPcmInput && this.module?._free) {
             this.module._free(this.wasmPcmInput);
@@ -116,6 +121,14 @@ class AudioFrameBuffer {
         this.bufferIndex = 0;
         this.hasProcessedFrame = false;
         this.processedBuffer = new Float32Array(RNNOISE_FRAME_SIZE);
+        this.processedIndex = 0;
+    }
+
+    reset() {
+        this.frameBuffer.fill(0);
+        this.processedBuffer.fill(0);
+        this.bufferIndex = 0;
+        this.hasProcessedFrame = false;
         this.processedIndex = 0;
     }
 
@@ -166,9 +179,11 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
         this.initialized = false;
+        this.initializing = false;
         this.enabled = false;
         this._destroyed = false;
-        this.sampleRate = sampleRate || 48000;
+        this.sampleRate = sampleRate;
+        if (this.sampleRate !== 48000) throw new Error('RNNoise requires a 48000Hz audio context');
 
         console.log('AudioWorklet processor initialized with sample rate:', this.sampleRate);
 
@@ -183,25 +198,38 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
 
     setupMessageHandler() {
         this.port.onmessage = async (event) => {
+            if (this._destroyed) return;
             const { type, jsContent, enabled } = event.data;
             switch (type) {
                 case 'sync-module':
+                    if (this.initialized || this.initializing) return;
+                    this.initializing = true;
                     try {
                         const module = await this.wasmInitializer.initSyncModule(jsContent);
+                        if (this._destroyed) return;
                         this.contextManager = new RNNoiseContextManager(module);
                         this.initialized = true;
+                        this.port.postMessage({ type: 'wasm-ready' });
                     } catch (error) {
                         console.error('Failed to initialize sync module:', error);
+                        this.port.postMessage({ type: 'wasm-error', error: error.message });
+                    } finally {
+                        this.initializing = false;
                     }
                     break;
                 case 'enable':
-                    this.enabled = enabled;
+                    if (this.enabled !== Boolean(enabled)) {
+                        this.frameBuffer.reset();
+                        this.contextManager?.reset();
+                        this.enabled = Boolean(enabled);
+                    }
                     break;
             }
         };
     }
 
     process(inputs, outputs, parameters) {
+        if (this._destroyed) return false;
         const input = inputs[0]?.[0];
         const output = outputs[0]?.[0];
         if (!input || !output) return true;

@@ -1,6 +1,6 @@
 {
     "name": "rnnoise-poc",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "RNNoise Audio Noise Suppression Proof of Concept",
     "main": "server.js",
     "scripts": {
@@ -10,11 +10,11 @@
         "format:check": "prettier --check ."
     },
     "dependencies": {
-        "express": "^5.1.0"
+        "express": "^5.2.1"
     },
     "devDependencies": {
-        "nodemon": "^3.1.10",
-        "prettier": "^3.6.2"
+        "nodemon": "^3.1.14",
+        "prettier": "^3.9.9"
     },
     "keywords": [
         "rnnoise",
