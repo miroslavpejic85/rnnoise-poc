@@ -236,6 +236,7 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
 
         if (!this.initialized || !this.enabled) {
             output.set(input);
+            this.volumeAnalyzer.calculateVolume(input, output, this.port);
             return true;
         }
 

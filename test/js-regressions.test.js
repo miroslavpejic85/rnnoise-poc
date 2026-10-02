@@ -70,10 +70,18 @@ function loadApp(options = {}) {
         document: {
             getElementById(id) {
                 return (elements[id] ??= {
-                    addEventListener() {},
+                    listeners: {},
+                    addEventListener(type, listener) {
+                        this.listeners[type] = listener;
+                    },
                     pause() {},
+                    play: options.play ?? (async () => {}),
+                    attributes: {},
+                    setAttribute(name, value) {
+                        this.attributes[name] = value;
+                    },
                     style: {},
-                    classList: { add() {}, remove() {} },
+                    classList: { add() {}, remove() {}, toggle() {} },
                     textContent: '',
                     scrollHeight: 0,
                 });
@@ -115,6 +123,161 @@ test('concurrent starts create one session and stop releases its resources', asy
     assert.equal(tracks[0].stopped, true);
     assert.equal(elements.audioElement.srcObject, null);
     assert.equal(elements.startBtn.disabled, false);
+});
+
+test('session controls expose accessible live, filter, and stopped states', async () => {
+    const { app, elements } = loadApp();
+    await app.startProcessing();
+    assert.equal(elements.startBtn.textContent, 'Stop microphone');
+    assert.equal(elements.sessionState.textContent, 'Microphone live');
+    assert.equal(elements.toggleBtn.disabled, true);
+    assert.equal(elements.toggleBtn.attributes['aria-checked'], 'false');
+    app.messageHandler.handleMessage({ data: { type: 'wasm-ready' } });
+    assert.equal(elements.toggleBtn.disabled, false);
+    elements.toggleBtn.listeners.click();
+    assert.equal(elements.toggleBtn.attributes['aria-checked'], 'true');
+    assert.equal(elements.toggleLabel.textContent, 'On');
+    assert.equal(elements.filterState.textContent, 'Noise suppression on');
+    assert.equal(app.workletNode.messages[0].enabled, true);
+    elements.toggleBtn.listeners.click();
+    assert.equal(elements.toggleBtn.attributes['aria-checked'], 'false');
+    assert.equal(elements.toggleLabel.textContent, 'Off');
+    assert.equal(app.workletNode.messages[1].enabled, false);
+    app.stopProcessing();
+    assert.equal(elements.startBtn.textContent, 'Start microphone');
+    assert.equal(elements.sessionState.textContent, 'Microphone inactive');
+    assert.equal(elements.toggleBtn.disabled, true);
+    assert.equal(elements.toggleBtn.attributes['aria-checked'], 'false');
+    assert.equal(elements.inputVolume.style.width, '0%');
+    assert.equal(elements.outputMeter.attributes['aria-valuenow'], '-60');
+});
+
+test('level meters show clamped decibels and reset after stopping', async () => {
+    const { app, elements } = loadApp();
+    await app.startProcessing();
+    app.uiManager.updateVolumeBar('inputVolume', 0.1);
+    assert.equal(elements.inputLevel.textContent, '-20 dB');
+    assert.equal(elements.inputMeter.attributes['aria-valuenow'], '-20');
+    app.uiManager.updateVolumeBar('outputVolume', 2);
+    assert.equal(elements.outputLevel.textContent, '0 dB');
+    assert.equal(elements.outputVolume.style.width, '100%');
+    app.stopProcessing();
+    assert.equal(elements.inputLevel.textContent, '-60 dB');
+    assert.equal(elements.outputVolume.style.width, '0%');
+});
+
+test('starting state is visible while microphone permission is pending', async () => {
+    const permission = deferred();
+    const { app, elements } = loadApp({ getUserMedia: () => permission.promise });
+    const starting = app.startProcessing();
+    assert.equal(elements.startBtn.disabled, true);
+    assert.equal(elements.startBtn.textContent, 'Starting microphone...');
+    permission.reject(new Error('permission denied'));
+    await starting;
+    assert.equal(elements.startBtn.textContent, 'Start microphone');
+    assert.equal(elements.startBtn.disabled, false);
+    assert.equal(elements.status.className, 'status error');
+    assert.match(elements.status.textContent, /permission denied/);
+});
+
+test('noise suppression waits for readiness and repeated mode selection is idempotent', async () => {
+    const { app, elements } = loadApp();
+    await app.startProcessing();
+    app.setNoiseSuppression(true);
+    assert.equal(app.noiseSuppressionEnabled, false);
+    assert.equal(app.workletNode.messages.length, 0);
+    app.messageHandler.handleMessage({ data: { type: 'wasm-ready' } });
+    app.setNoiseSuppression(true);
+    app.setNoiseSuppression(true);
+    assert.equal(app.workletNode.messages.length, 1);
+    assert.equal(elements.toggleLabel.textContent, 'On');
+    app.setNoiseSuppression(false);
+    assert.equal(elements.toggleBtn.attributes['aria-checked'], 'false');
+    assert.equal(elements.toggleLabel.textContent, 'Off');
+    app.stopProcessing();
+    assert.equal(app.filterReady, false);
+});
+
+test('native audio preview starts automatically and stop releases its stream', async () => {
+    let plays = 0;
+    const { app, elements } = loadApp({
+        play: async () => {
+            plays++;
+        },
+    });
+    await app.startProcessing();
+    assert.equal(plays, 1);
+    assert.equal(elements.audioElement.muted, false);
+    assert.equal(elements.audioElement.volume, 0.5);
+    assert.equal(elements.audioElement.srcObject, app.destinationNode.stream);
+    assert.equal(elements.audioPreview.style.display, 'block');
+    app.stopProcessing();
+    assert.equal(elements.audioElement.srcObject, null);
+    assert.equal(elements.audioPreview.style.display, 'none');
+    await app.startProcessing();
+    assert.equal(plays, 2);
+    app.stopProcessing();
+});
+
+test('native audio preview playback failure leaves processing active and offers Play retry', async () => {
+    const { app, elements } = loadApp({
+        play: async () => {
+            throw new Error('autoplay blocked');
+        },
+    });
+    await app.startProcessing();
+    await new Promise(setImmediate);
+    assert.equal(app.isProcessing, true);
+    assert.match(elements.status.textContent, /Press Play in the audio preview to retry/);
+    assert.equal(elements.audioPreview.style.display, 'block');
+    app.stopProcessing();
+});
+
+test('a late preview playback failure cannot update a restarted session', async () => {
+    const playback = deferred();
+    let attempts = 0;
+    const { app, elements } = loadApp({ play: () => (++attempts === 1 ? playback.promise : Promise.resolve()) });
+    await app.startProcessing();
+    assert.equal(elements.startBtn.disabled, false);
+    app.stopProcessing();
+    await app.startProcessing();
+    const status = elements.status.textContent;
+    playback.reject(new Error('stale playback error'));
+    await new Promise(setImmediate);
+    assert.equal(elements.status.textContent, status);
+    app.stopProcessing();
+});
+
+test('original audio passes through and reports levels before WASM is ready', () => {
+    const { create, messages } = loadWorklet();
+    const processor = create();
+    const input = new Float32Array(128).fill(0.1);
+    input[0] = 1.1;
+    const output = new Float32Array(128);
+    processor.process([[input]], [[output]]);
+    assert.deepEqual(output, input);
+    const volume = messages.find((message) => message.type === 'volume');
+    assert.equal(volume.original, volume.processed);
+    assert.equal(volume.original > 0, true);
+});
+
+test('activity logs speech transitions instead of every frame and stays bounded', () => {
+    const { app, elements } = loadApp();
+    const speech = { data: { type: 'vad', isSpeech: true, probability: 0.95 } };
+    app.messageHandler.handleMessage(speech);
+    app.messageHandler.handleMessage(speech);
+    assert.equal(elements.status.textContent.match(/Speech detected/g).length, 1);
+    app.messageHandler.handleMessage({ data: { type: 'vad', isSpeech: false } });
+    app.messageHandler.handleMessage(speech);
+    assert.equal(elements.status.textContent.match(/Speech detected/g).length, 2);
+    app.stopProcessing();
+    assert.equal(app.messageHandler.isSpeech, false);
+    for (let index = 0; index < 150; index++) {
+        app.uiManager.updateStatus(`Event ${index}`);
+    }
+    assert.equal(elements.status.textContent.split('\n').length, 100);
+    assert.equal(elements.status.textContent.includes('Event 49\n'), false);
+    assert.equal(elements.status.textContent.endsWith('Event 149'), true);
 });
 
 test('worklet load failure stops the microphone and closes the audio context', async () => {

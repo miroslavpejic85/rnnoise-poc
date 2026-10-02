@@ -7,36 +7,103 @@
         <link rel="stylesheet" href="../styles/index.css" />
     </head>
     <body>
-        <div class="container">
-            <h1>🎙️ RNNoise Test</h1>
-
-            <div class="controls">
-                <button id="startBtn">🎤 Start Audio Processing</button>
-                <button id="toggleBtn" disabled>🔇 RNNoise: OFF</button>
-            </div>
-
-            <div class="volume-bars">
-                <div class="volume-bar">
-                    <div>Input Volume</div>
-                    <div class="volume-bar-container">
-                        <div class="volume-bar-fill" id="inputVolume"></div>
+        <main class="workspace">
+            <header class="page-header">
+                <div>
+                    <p class="eyebrow">AUDIO LAB / LIVE PROCESSING</p>
+                    <h1>RNNoise<span class="brand-dot">.</span></h1>
+                </div>
+                <span class="session-state" id="sessionState" role="status">Microphone inactive</span>
+            </header>
+            <section class="session" aria-labelledby="sessionHeading">
+                <div class="session-heading">
+                    <div>
+                        <p class="eyebrow">01 / SESSION</p>
+                        <h2 id="sessionHeading">Noise suppression</h2>
+                    </div>
+                    <button id="startBtn" class="start-button" type="button">Start microphone</button>
+                </div>
+                <div class="suppression-row">
+                    <div>
+                        <h3 id="suppressionLabel">RNNoise filter</h3>
+                        <p class="mode-label" id="filterState">Noise suppression off</p>
+                    </div>
+                    <button
+                        id="toggleBtn"
+                        class="filter-switch"
+                        type="button"
+                        role="switch"
+                        aria-checked="false"
+                        aria-labelledby="suppressionLabel"
+                        disabled
+                    >
+                        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                        <span id="toggleLabel">Off</span>
+                    </button>
+                </div>
+            </section>
+            <section class="levels" aria-labelledby="levelsHeading">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">02 / SIGNAL</p>
+                        <h2 id="levelsHeading">Audio levels</h2>
+                    </div>
+                    <span class="unit">dBFS</span>
+                </div>
+                <div
+                    class="meter"
+                    role="meter"
+                    aria-label="Microphone input level"
+                    aria-valuemin="-60"
+                    aria-valuemax="0"
+                    aria-valuenow="-60"
+                    id="inputMeter"
+                >
+                    <div class="meter-heading">
+                        <h3>Microphone input</h3>
+                        <span class="meter-value" id="inputLevel">-60 dB</span>
+                    </div>
+                    <div class="volume-bar-container"><div class="volume-bar-fill" id="inputVolume"></div></div>
+                    <div class="meter-scale" aria-hidden="true">
+                        <span>-60</span><span>-45</span><span>-30</span><span>-15</span><span>0</span>
                     </div>
                 </div>
-                <div class="volume-bar">
-                    <div>Output Volume</div>
-                    <div class="volume-bar-container">
-                        <div class="volume-bar-fill" id="outputVolume"></div>
+                <div
+                    class="meter"
+                    role="meter"
+                    aria-label="Audio output level"
+                    aria-valuemin="-60"
+                    aria-valuemax="0"
+                    aria-valuenow="-60"
+                    id="outputMeter"
+                >
+                    <div class="meter-heading">
+                        <h3>Audio output</h3>
+                        <span class="meter-value" id="outputLevel">-60 dB</span>
+                    </div>
+                    <div class="volume-bar-container"><div class="volume-bar-fill output" id="outputVolume"></div></div>
+                    <div class="meter-scale" aria-hidden="true">
+                        <span>-60</span><span>-45</span><span>-30</span><span>-15</span><span>0</span>
                     </div>
                 </div>
-            </div>
-
-            <div class="audio-preview" id="audioPreview">
-                <h4>Audio Preview:</h4>
-                <audio id="audioElement" controls autoplay></audio>
-            </div>
-
-            <div class="status" id="status">Ready to start...</div>
-        </div>
+            </section>
+            <section class="audio-preview" id="audioPreview" aria-labelledby="previewHeading">
+                <div class="section-heading">
+                    <h2 id="previewHeading">Audio preview</h2>
+                    <span class="monitor-tag">LIVE OUTPUT</span>
+                </div>
+                <audio id="audioElement" aria-label="Live audio output" controls autoplay></audio>
+                <p class="monitor-note">Use headphones to avoid microphone feedback.</p>
+            </section>
+            <section class="activity" aria-labelledby="activityHeading">
+                <div class="section-heading">
+                    <h2 id="activityHeading">Status</h2>
+                    <span class="unit">SESSION LOG</span>
+                </div>
+                <div class="status" id="status" role="log" aria-live="off" tabindex="0">Ready. Microphone is off.</div>
+            </section>
+            <footer><span>RNNoise / WebAssembly</span><span>48 kHz · Mono</span></footer>
+        </main>
 
         <script src="../js/node-processor.js"></script>
     </body>

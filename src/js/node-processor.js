@@ -4,6 +4,9 @@
 class UIManager {
     constructor(elements) {
         this.elements = elements;
+        if (this.elements.status) {
+            this.elements.status.textContent = this.elements.status.textContent.trim();
+        }
     }
 
     updateStatus(message, type = 'info') {
@@ -14,20 +17,30 @@ class UIManager {
             return;
         }
 
-        this.elements.status.textContent += `\n[${timestamp}] ${message}`;
+        this.elements.status.textContent = `${this.elements.status.textContent}\n[${timestamp}] ${message}`
+            .split('\n')
+            .slice(-100)
+            .join('\n');
         this.elements.status.className = `status ${type}`;
         this.elements.status.scrollTop = this.elements.status.scrollHeight;
     }
 
-    updateUI(isProcessing, noiseSuppressionEnabled) {
-        this.elements.startBtn.textContent = isProcessing ? '🛑 Stop Processing' : '🎤 Start Audio Processing';
-        this.elements.toggleBtn.disabled = !isProcessing;
+    updateUI(isProcessing, noiseSuppressionEnabled, filterReady = false) {
+        this.elements.startBtn.textContent = isProcessing ? 'Stop microphone' : 'Start microphone';
+        this.elements.startBtn.classList.toggle('active', isProcessing);
+        this.elements.toggleBtn.disabled = !isProcessing || !filterReady;
+        this.elements.toggleBtn.setAttribute('aria-checked', String(noiseSuppressionEnabled));
+        document.getElementById('toggleLabel').textContent = noiseSuppressionEnabled ? 'On' : 'Off';
+        document.getElementById('filterState').textContent = noiseSuppressionEnabled
+            ? 'Noise suppression on'
+            : 'Noise suppression off';
+        const sessionState = document.getElementById('sessionState');
+        sessionState.textContent = isProcessing ? 'Microphone live' : 'Microphone inactive';
+        sessionState.classList.toggle('live', isProcessing);
 
         if (noiseSuppressionEnabled) {
-            this.elements.toggleBtn.textContent = '🔊 RNNoise: ON';
             this.elements.toggleBtn.classList.add('active');
         } else {
-            this.elements.toggleBtn.textContent = '🔇 RNNoise: OFF';
             this.elements.toggleBtn.classList.remove('active');
         }
     }
@@ -41,13 +54,26 @@ class UIManager {
             const normalized = Math.max(0, Math.min(1, (db - minDb) / (maxDb - minDb)));
             const percentage = normalized * 100;
             bar.style.width = `${percentage}%`;
+            const prefix = elementId === 'inputVolume' ? 'input' : 'output';
+            const level = Math.max(minDb, Math.min(maxDb, db));
+            document.getElementById(`${prefix}Level`).textContent = `${Math.round(level)} dB`;
+            document.getElementById(`${prefix}Meter`).setAttribute('aria-valuenow', String(level));
         }
     }
 
     showAudioPreview(stream) {
+        this.elements.audioElement.muted = false;
         this.elements.audioElement.srcObject = stream;
         this.elements.audioElement.volume = 0.5;
         this.elements.audioPreview.style.display = 'block';
+        this.elements.audioElement.play().catch((error) => {
+            if (this.elements.audioElement.srcObject === stream) {
+                this.updateStatus(
+                    'Playback unavailable. Press Play in the audio preview to retry: ' + error.message,
+                    'error'
+                );
+            }
+        });
     }
 
     hideAudioPreview() {
@@ -59,22 +85,27 @@ class UIManager {
 
 // Handle audio worklet message processing
 class MessageHandler {
-    constructor(uiManager, wasmLoader) {
+    constructor(uiManager, wasmLoader, onFilterReady = () => {}) {
         this.uiManager = uiManager;
         this.wasmLoader = wasmLoader;
+        this.isSpeech = false;
+        this.onFilterReady = onFilterReady;
     }
 
     handleMessage(event, workletNode) {
         if (event.data.type === 'request-wasm') {
             this.wasmLoader.loadWasmBuffer(workletNode);
         } else if (event.data.type === 'wasm-ready') {
+            this.onFilterReady(true);
             this.uiManager.updateStatus('✅ RNNoise WASM initialized successfully', 'success');
         } else if (event.data.type === 'wasm-error') {
+            this.onFilterReady(false);
             this.uiManager.updateStatus('❌ RNNoise WASM error: ' + event.data.error, 'error');
         } else if (event.data.type === 'vad') {
-            if (event.data.isSpeech) {
+            if (event.data.isSpeech && !this.isSpeech) {
                 this.uiManager.updateStatus(`🗣️ Speech detected (VAD: ${event.data.probability.toFixed(2)})`, 'info');
             }
+            this.isSpeech = event.data.isSpeech;
         } else if (event.data.type === 'volume') {
             this.uiManager.updateVolumeBar('inputVolume', event.data.original);
             this.uiManager.updateVolumeBar('outputVolume', event.data.processed);
@@ -131,6 +162,7 @@ class RNNoiseProcessor {
         this.isStarting = false;
         this.sessionId = 0;
         this.noiseSuppressionEnabled = false;
+        this.filterReady = false;
 
         this.initializeUI();
         this.initializeDependencies();
@@ -152,7 +184,11 @@ class RNNoiseProcessor {
     initializeDependencies() {
         this.uiManager = new UIManager(this.elements);
         this.wasmLoader = new WasmLoader(this.uiManager, () => this.workletNode);
-        this.messageHandler = new MessageHandler(this.uiManager, this.wasmLoader);
+        this.messageHandler = new MessageHandler(this.uiManager, this.wasmLoader, (ready) => {
+            this.filterReady = ready;
+            if (!ready) this.noiseSuppressionEnabled = false;
+            this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled, this.filterReady);
+        });
     }
 
     async toggleProcessing() {
@@ -168,6 +204,7 @@ class RNNoiseProcessor {
 
         this.isStarting = true;
         this.elements.startBtn.disabled = true;
+        this.elements.startBtn.textContent = 'Starting microphone...';
         const sessionId = ++this.sessionId;
 
         try {
@@ -212,7 +249,7 @@ class RNNoiseProcessor {
             this.uiManager.showAudioPreview(this.destinationNode.stream);
 
             this.isProcessing = true;
-            this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled);
+            this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled, this.filterReady);
             this.uiManager.updateStatus('🎤 Audio processing started', 'success');
         } catch (error) {
             if (this.sessionId !== sessionId) return;
@@ -251,15 +288,25 @@ class RNNoiseProcessor {
         this.destinationNode = null;
         this.isProcessing = false;
         this.noiseSuppressionEnabled = false;
+        this.filterReady = false;
+        this.messageHandler.isSpeech = false;
 
         this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled);
+        this.uiManager.updateVolumeBar('inputVolume', 0);
+        this.uiManager.updateVolumeBar('outputVolume', 0);
         this.uiManager.hideAudioPreview();
         this.uiManager.updateStatus('🛑 Audio processing stopped', 'info');
     }
 
     toggleNoiseSuppression() {
+        this.setNoiseSuppression(!this.noiseSuppressionEnabled);
+    }
+
+    setNoiseSuppression(enabled) {
         if (!this.isProcessing || !this.workletNode) return;
-        this.noiseSuppressionEnabled = !this.noiseSuppressionEnabled;
+        if (enabled && !this.filterReady) return;
+        if (this.noiseSuppressionEnabled === enabled) return;
+        this.noiseSuppressionEnabled = enabled;
 
         if (this.workletNode) {
             this.workletNode.port.postMessage({
@@ -272,12 +319,7 @@ class RNNoiseProcessor {
             ? this.uiManager.updateStatus('🔊 RNNoise enabled - background noise will be suppressed', 'success')
             : this.uiManager.updateStatus('🔇 RNNoise disabled - audio passes through unchanged', 'info');
 
-        if (!this.noiseSuppressionEnabled) {
-            this.uiManager.updateVolumeBar('inputVolume', 0);
-            this.uiManager.updateVolumeBar('outputVolume', 0);
-        }
-
-        this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled);
+        this.uiManager.updateUI(this.isProcessing, this.noiseSuppressionEnabled, this.filterReady);
     }
 }
 
